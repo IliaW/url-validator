@@ -1,0 +1,59 @@
+env: "dev"
+log_level: "debug"
+log_type: "text" # 'text' or 'json'. Text type has colorized error levels
+service_name: "url-validator"
+port: "8080"
+version: "0.0.1"
+
+worker:
+  max_workers: 8 # The number of goroutines that will be launched for scraping
+
+robots:
+  full_url: "https://localhost:8081/service-name/v1/scrape-allowed?url=%s&user_agent=bot"
+
+http_client:
+  request_timeout: "15s" # The maximum time to wait for the response from the server
+  max_idle_connections: 20
+  max_idle_connections_per_host: 10
+  idle_connection_timeout: "90s"
+  tls_handshake_timeout: "10s"
+  dial_timeout: "5s"
+  dial_keep_alive: "30s"
+  tls_insecure_skip_verify: false # If true - the client will not verify the server's certificate
+
+cache:
+  servers: "cache:11211"
+  threshold: 10 # The number of scrape workers that are able to scrape the same URL at the same time
+  ttl_for_threshold: "1m"
+
+database:
+  host: "mysql"
+  port: "3306"
+  user: "admin"
+  password: "test"
+  name: "url_scraper"
+  conn_max_lifetime: "10m"
+  max_open_conns: 10
+  max_idle_conns: 10
+
+sqs:
+  aws_access_key: "test"
+  aws_secret_key: "test"
+  aws_base_endpoint: "http://localstack:4566" # For LocalStack. Empty string has no effect.
+  region: "us-east-1"
+  queue_name: "validation-worker-queue"
+  max_number_of_messages: 10 # The number of messages to receive from the queue at one request. Max value is 10
+  wait_time_seconds: 5 # The time (in seconds) to wait for new messages.
+  visibility_timeout: 30 # The time (in seconds) that the received message will be invisible for other consumers
+
+kafka:
+  producer:
+    addr: "kafka:9092"
+    write_topic_name: "classify-work-kafka-topic"
+    max_attempts: 3 # Number of attempts to send a message to Kafka
+    batch_size: 100 # Number of messages to batch before sending to Kafka
+    batch_timeout: "2s" # The time after which messages will be sent to Kafka, even if the batch_size has not been reached (has custom implementation)
+    read_timeout: "10s"
+    write_timeout: "10s"
+    required_acks: 1 # Number of acknowledges: 0 - fire-and-forget, 1 - wait for the leader, -1 - wait for all
+    async: false # If true - no guarantees of whether the messages were written to Kafka
