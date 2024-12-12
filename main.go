@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -49,14 +50,14 @@ func main() {
 	httpClient := setupHttpClient()
 	log.Info("starting application on port "+cfg.Port, slog.String("env", cfg.Env))
 
-	getSqsChan := make(chan *string, 100)
-	sendSqsChan := make(chan *string, 10)
-	kafkaChan := make(chan *model.ScrapeTask, 100)
-	panicChan := make(chan struct{}, cfg.WorkerSettings.MaxWorkers)
+	getSqsChan := make(chan *string, cfg.GetSqsChanSize)
+	sendSqsChan := make(chan *string, cfg.SendSqsChanSize)
+	kafkaChan := make(chan *model.ScrapeTask, cfg.KafkaChanSize)
+	panicChan := make(chan struct{}, parallelWorkersCount())
 
 	wg := &sync.WaitGroup{}
 	wg.Add(2)
-	sqs := aws_sqs.NewSQSWorker(getSqsChan, sendSqsChan, cfg.SQSSettings, log, wg)
+	sqs := aws_sqs.NewSQSWorker(getSqsChan, sendSqsChan, cfg, log, wg)
 	go sqs.SQSConsumer(ctx)
 	go sqs.SQSProducer()
 
@@ -73,7 +74,7 @@ func main() {
 		Cache:           cache,
 		Wg:              workerWg,
 	}
-	for i := 0; i < cfg.WorkerSettings.MaxWorkers; i++ {
+	for i := 0; i < parallelWorkersCount(); i++ {
 		workerWg.Add(1)
 		go validationWorker.Run()
 	}
@@ -82,20 +83,20 @@ func main() {
 		for range panicChan {
 			workerWg.Add(1)
 			go validationWorker.Run()
-			time.Sleep(3 * time.Minute) // timeout to avoid polluting logs if something unrecoverable happened
+			time.Sleep(cfg.RestartTimeout) // timeout to avoid polluting logs if something unrecoverable happened
 		}
 	}()
 
 	wg.Add(1)
-	go broker.KafkaProducer(kafkaChan, cfg.KafkaSettings.Producer, log, wg)
+	kafka := broker.NewKafkaProducer(kafkaChan, cfg.KafkaSettings.Producer, log, wg)
+	go kafka.Run()
 
 	// Graceful shutdown.
-	// 1. Stop SQS Consumer by system call.
-	// 2. Close getSqsChan
-	// 3. Wait till all Workers processed all messages from getSqsChan
-	// 4. Close sendSqsChan, kafkaChan, and panicChan
-	// 5. Wait till SQS Producer and Kafka Producer process all messages.
-	// 6. Close database and memcached connections
+	// 1. Stop SQS Consumer by system call. Close getSqsChan
+	// 2. Wait till all Workers processed all messages from getSqsChan
+	// 3. Close sendSqsChan, kafkaChan, and panicChan
+	// 4. Wait till SQS Producer and Kafka Producer process all messages.
+	// 5. Close database and memcached connections
 	<-ctx.Done()
 	log.Info("stopping server...")
 	workerWg.Wait()
@@ -217,4 +218,17 @@ func setupHttpClient() *http.Client {
 		Transport: transport,
 		Timeout:   cfg.HttpClientSettings.RequestTimeout,
 	}
+}
+
+// Limit to 24 if the number of CPUs is bigger. See epoll issue https://github.com/golang/go/issues/65064
+func parallelWorkersCount() int {
+	limit := cfg.WorkerSettings.WorkersLimit
+	numCPU := runtime.NumCPU()
+	if limit == -1 {
+		return numCPU
+	}
+	if numCPU > limit {
+		return limit
+	}
+	return numCPU
 }

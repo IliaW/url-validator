@@ -14,25 +14,41 @@ import (
 	"github.com/segmentio/kafka-go/compress/lz4"
 )
 
-func KafkaProducer(kafkaChan <-chan *model.ScrapeTask, cfg *config.KafkaProducerConfig, log *slog.Logger,
-	wg *sync.WaitGroup) {
-	defer wg.Done()
-	log.Info("starting kafka producer...", slog.String("topic", cfg.WriteTopicName))
+type KafkaProducerClient struct {
+	kafkaChan <-chan *model.ScrapeTask
+	cfg       *config.KafkaProducerConfig
+	log       *slog.Logger
+	wg        *sync.WaitGroup
+}
+
+func NewKafkaProducer(kafkaChan <-chan *model.ScrapeTask, cfg *config.KafkaProducerConfig, log *slog.Logger,
+	wg *sync.WaitGroup) *KafkaProducerClient {
+	return &KafkaProducerClient{
+		kafkaChan: kafkaChan,
+		cfg:       cfg,
+		log:       log,
+		wg:        wg,
+	}
+}
+
+func (k *KafkaProducerClient) Run() {
+	defer k.wg.Done()
+	k.log.Info("starting kafka producer...", slog.String("topic", k.cfg.WriteTopicName))
 
 	w := kafka.Writer{
-		Addr:         kafka.TCP(strings.Split(cfg.Addr, ",")...),
-		Topic:        cfg.WriteTopicName,
+		Addr:         kafka.TCP(strings.Split(k.cfg.Addr, ",")...),
+		Topic:        k.cfg.WriteTopicName,
 		Balancer:     &kafka.Hash{},
-		MaxAttempts:  cfg.MaxAttempts,
+		MaxAttempts:  k.cfg.MaxAttempts,
 		BatchSize:    1,                // the parameter is controlled by batch variable
 		BatchTimeout: time.Millisecond, // the parameter is controlled by batchTicker variable
-		ReadTimeout:  cfg.ReadTimeout,
-		WriteTimeout: cfg.WriteTimeout,
-		RequiredAcks: kafka.RequiredAcks(cfg.RequiredAsks),
-		Async:        cfg.Async,
+		ReadTimeout:  k.cfg.ReadTimeout,
+		WriteTimeout: k.cfg.WriteTimeout,
+		RequiredAcks: kafka.RequiredAcks(k.cfg.RequiredAsks),
+		Async:        k.cfg.Async,
 		Completion: func(messages []kafka.Message, err error) {
 			if err != nil {
-				log.Error("failed to send messages to kafka.", slog.String("err", err.Error()))
+				k.log.Error("failed to send messages to kafka.", slog.String("err", err.Error()))
 			}
 		},
 		Compression: kafka.Compression(new(lz4.Codec).Code()),
@@ -40,27 +56,27 @@ func KafkaProducer(kafkaChan <-chan *model.ScrapeTask, cfg *config.KafkaProducer
 	defer func() {
 		err := w.Close()
 		if err != nil {
-			log.Error("failed to close kafka writer.", slog.String("err", err.Error()))
+			k.log.Error("failed to close kafka writer.", slog.String("err", err.Error()))
 		}
 	}()
 
-	batchTicker := time.Tick(cfg.BatchTimeout)
-	batch := make([]kafka.Message, 0, cfg.BatchSize)
+	batchTicker := time.Tick(k.cfg.BatchTimeout)
+	batch := make([]kafka.Message, 0, k.cfg.BatchSize)
 	writeMessage := func(batch []kafka.Message) {
-		ctx, cancel := context.WithTimeout(context.Background(), cfg.WriteTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), k.cfg.WriteTimeout)
 		defer cancel()
 		err := w.WriteMessages(ctx, batch...)
 		if err != nil {
-			log.Error("failed to send messages to kafka.", slog.String("err", err.Error()))
+			k.log.Error("failed to send messages to kafka.", slog.String("err", err.Error()))
 			return
 		}
-		log.Debug("successfully sent messages to kafka.", slog.Int("batch length", len(batch)))
+		k.log.Debug("successfully sent messages to kafka.", slog.Int("batch length", len(batch)))
 	}
 
-	for scrapeTask := range kafkaChan {
+	for scrapeTask := range k.kafkaChan {
 		body, err := json.Marshal(scrapeTask)
 		if err != nil {
-			log.Error("marshaling error.", slog.String("err", err.Error()),
+			k.log.Error("marshaling error.", slog.String("err", err.Error()),
 				slog.Any("scrapeTask", scrapeTask))
 			continue
 		}
@@ -71,18 +87,18 @@ func KafkaProducer(kafkaChan <-chan *model.ScrapeTask, cfg *config.KafkaProducer
 		select {
 		case <-batchTicker:
 			writeMessage(batch)
-			batch = make([]kafka.Message, 0, cfg.BatchSize)
+			batch = batch[:0]
 		default:
-			if len(batch) >= cfg.BatchSize {
+			if len(batch) >= k.cfg.BatchSize {
 				writeMessage(batch)
-				batch = make([]kafka.Message, 0, cfg.BatchSize)
+				batch = batch[:0]
 			}
 		}
 	}
 	// Some messages may remain in the batch after kafkaChan is closed
 	if len(batch) > 0 {
-		log.Debug("messages in batch.", slog.Int("count", len(batch)))
+		k.log.Debug("messages in batch.", slog.Int("count", len(batch)))
 		writeMessage(batch)
 	}
-	log.Info("stopping kafka writer.")
+	k.log.Info("stopping kafka writer.")
 }

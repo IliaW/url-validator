@@ -3,9 +3,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        GOLANG_VERSION: 1.23.3
-        GITHUB_ACCESS_TOKEN: ${GITHUB_ACCESS_TOKEN}
     ports:
       - "8080:8080"
     depends_on:

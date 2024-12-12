@@ -7,10 +7,12 @@ import (
 	"sync"
 
 	"github.com/IliaW/url-validator/config"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awsCfg "github.com/aws/aws-sdk-go-v2/config"
 	crd "github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/sqs/types"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
 
 type SQSWorker struct {
@@ -23,25 +25,47 @@ type SQSWorker struct {
 	wg          *sync.WaitGroup
 }
 
-func NewSQSWorker(getSqsChan chan<- *string, sendSqsChan <-chan *string, cfg *config.SQSConfig,
+func NewSQSWorker(getSqsChan chan<- *string, sendSqsChan <-chan *string, cfg *config.Config,
 	log *slog.Logger, wg *sync.WaitGroup) *SQSWorker {
 	log.Info("connecting to sqs...")
 	ctx := context.Background()
 
-	sqsConfig, err := awsCfg.LoadDefaultConfig(ctx,
-		awsCfg.WithCredentialsProvider(crd.NewStaticCredentialsProvider(cfg.AwsAccessKey, cfg.AwsSecretKey, "")),
-		awsCfg.WithRegion(cfg.Region),
-		awsCfg.WithBaseEndpoint(cfg.AwsBaseEndpoint))
+	sqsConfig, err := awsCfg.LoadDefaultConfig(ctx, awsCfg.WithCredentialsProvider(crd.NewStaticCredentialsProvider(
+		cfg.SQSSettings.AwsAccessKey,
+		cfg.SQSSettings.AwsSecretKey,
+		cfg.SQSSettings.AwsSessionToken)),
+		awsCfg.WithRegion(cfg.SQSSettings.Region),
+		awsCfg.WithBaseEndpoint(cfg.SQSSettings.AwsBaseEndpoint))
 	if err != nil {
 		log.Error("failed to load sqs config.", slog.String("err", err.Error()))
 		os.Exit(1)
 	}
 
+	if cfg.SQSSettings.RoleArn != "" && cfg.Env != "test" {
+		stsClient := sts.NewFromConfig(sqsConfig)
+		role, err := stsClient.AssumeRole(ctx, &sts.AssumeRoleInput{
+			RoleArn:         aws.String(cfg.SQSSettings.RoleArn),
+			RoleSessionName: aws.String(cfg.SQSSettings.RoleSessionName),
+		})
+		if err != nil {
+			log.Error("failed to assume role.", slog.String("err", err.Error()))
+			os.Exit(1)
+		}
+
+		sqsConfig, err = awsCfg.LoadDefaultConfig(ctx,
+			awsCfg.WithCredentialsProvider(crd.NewStaticCredentialsProvider(
+				*role.Credentials.AccessKeyId,
+				*role.Credentials.SecretAccessKey,
+				*role.Credentials.SessionToken),
+			),
+			awsCfg.WithRegion(cfg.SQSSettings.Region))
+	}
+
 	client := sqs.NewFromConfig(sqsConfig)
-	queueUrl, err := client.GetQueueUrl(ctx, &sqs.GetQueueUrlInput{QueueName: &cfg.QueueName})
+	queueUrl, err := client.GetQueueUrl(ctx, &sqs.GetQueueUrlInput{QueueName: &cfg.SQSSettings.QueueName})
 	if err != nil {
 		log.Error("failed to get queue url.", slog.String("err", err.Error()),
-			slog.String("queue_name", cfg.QueueName))
+			slog.String("queue_name", cfg.SQSSettings.QueueName))
 		os.Exit(1)
 	}
 
@@ -50,7 +74,7 @@ func NewSQSWorker(getSqsChan chan<- *string, sendSqsChan <-chan *string, cfg *co
 		url:         queueUrl.QueueUrl,
 		getSqsChan:  getSqsChan,
 		sendSqsChan: sendSqsChan,
-		cfg:         cfg,
+		cfg:         cfg.SQSSettings,
 		log:         log,
 		wg:          wg,
 	}

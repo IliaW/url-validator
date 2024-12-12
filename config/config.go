@@ -16,6 +16,10 @@ type Config struct {
 	ServiceName        string            `mapstructure:"service_name"`
 	Port               string            `mapstructure:"port"`
 	Version            string            `mapstructure:"version"`
+	GetSqsChanSize     int               `mapstructure:"get_sqs_chan_size"`
+	SendSqsChanSize    int               `mapstructure:"send_sqs_chan_size"`
+	KafkaChanSize      int               `mapstructure:"kafka_chan_size"`
+	RestartTimeout     time.Duration     `mapstructure:"restart_timeout"`
 	WorkerSettings     *WorkerConfig     `mapstructure:"worker"`
 	RobotsSettings     *RobotsConfig     `mapstructure:"robots"`
 	HttpClientSettings *HttpClientConfig `mapstructure:"http_client"`
@@ -26,7 +30,8 @@ type Config struct {
 }
 
 type WorkerConfig struct {
-	MaxWorkers int `mapstructure:"max_workers"`
+	WorkersLimit int    `mapstructure:"workers_limit"`
+	UserAgent    string `mapstructure:"user_agent"`
 }
 
 type RobotsConfig struct {
@@ -64,7 +69,10 @@ type DatabaseConfig struct {
 type SQSConfig struct {
 	AwsAccessKey        string `mapstructure:"aws_access_key"`
 	AwsSecretKey        string `mapstructure:"aws_secret_key"`
+	AwsSessionToken     string `mapstructure:"aws_session_token"`
 	AwsBaseEndpoint     string `mapstructure:"aws_base_endpoint"`
+	RoleArn             string `mapstructure:"role_arn"`
+	RoleSessionName     string `mapstructure:"role_session_name"`
 	Region              string `mapstructure:"region"`
 	QueueName           string `mapstructure:"queue_name"`
 	MaxNumberOfMessages int32  `mapstructure:"max_number_of_messages"`

@@ -1,12 +1,17 @@
-env: "dev"
+env: "test"
 log_level: "debug"
 log_type: "text" # 'text' or 'json'. Text type has colorized error levels
 service_name: "url-validator"
 port: "8080"
 version: "0.0.1"
+get_sqs_chan_size: 100 # The size of the buffered channel for SQS Consumer messages
+send_sqs_chan_size: 10 # ... for SQS Producer messages
+kafka_chan_size: 100 # ... for Kafka Producer messages
+restart_timeout: "1m" # Timeout to avoid polluting logs if something unrecoverable happened and panic occurred
 
 worker:
-  max_workers: 8 # The number of goroutines that will be launched for scraping
+  workers_limit: 24 # Launch runtime.NumCPU() workers by default. Limit the max workers count or set -1 to disable the setting. See https://github.com/golang/go/issues/65064
+  user_agent: "validation-worker-bot"
 
 robots:
   full_url: "https://localhost:8081/service-name/v1/scrape-allowed?url=%s&user_agent=bot"
@@ -39,9 +44,12 @@ database:
 sqs:
   aws_access_key: "test"
   aws_secret_key: "test"
+  aws_session_token: ""
   aws_base_endpoint: "http://localstack:4566" # For LocalStack. Empty string has no effect.
+  role_arn: "arn:aws:iam::000:role/test"
+  role_session_name: "aud-context-validation-worker"
   region: "us-east-1"
-  queue_name: "validation-worker-queue"
+  queue_name: "aud-context-validation-worker-queue"
   max_number_of_messages: 10 # The number of messages to receive from the queue at one request. Max value is 10
   wait_time_seconds: 5 # The time (in seconds) to wait for new messages.
   visibility_timeout: 30 # The time (in seconds) that the received message will be invisible for other consumers
@@ -49,7 +57,7 @@ sqs:
 kafka:
   producer:
     addr: "kafka:9092"
-    write_topic_name: "classify-work-kafka-topic"
+    write_topic_name: "scrape-work-kafka-topic"
     max_attempts: 3 # Number of attempts to send a message to Kafka
     batch_size: 100 # Number of messages to batch before sending to Kafka
     batch_timeout: "2s" # The time after which messages will be sent to Kafka, even if the batch_size has not been reached (has custom implementation)
